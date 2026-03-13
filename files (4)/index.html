@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Voice2SQL - Upload Your Database</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<link href="style.css" rel="stylesheet"/>
+</head>
+<body>
+<div class="app">
+<header>
+  <div class="logo">
+    <div class="logo-icon">&#127897;</div>
+    <div class="logo-text">Voice<span>2</span>SQL</div>
+  </div>
+  <div class="header-center">
+    <div class="badge badge-orange" id="dbBadge"><div class="dot dot-orange"></div>No DB Loaded</div>
+    <div class="badge badge-green"><div class="dot dot-green"></div>SERVER LIVE</div>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT PANEL -->
+  <div class="panel">
+
+    <!-- Upload Zone -->
+    <div class="section-label">&#128451; Upload Database</div>
+    <div class="upload-zone" id="uploadZone">
+      <div class="upload-icon">&#128190;</div>
+      <div class="upload-title">Drop your SQLite database</div>
+      <div class="upload-sub">Supports .db &middot; .sqlite &middot; .sqlite3<br/>Max file size: 50MB</div>
+      <label class="btn-upload" for="fileInput">Choose File</label>
+      <input type="file" id="fileInput" class="upload-input" accept=".db,.sqlite,.sqlite3"/>
+    </div>
+    <div id="uploadStatus" class="status"></div>
+
+    <!-- DB Info -->
+    <div id="dbInfoCard" style="display:none">
+      <div class="db-card loaded">
+        <div class="db-name">
+          &#10004; <span id="dbFileName">database.db</span>
+          <button class="btn-clear" id="clearBtn">Clear</button>
+        </div>
+        <div class="db-meta" id="dbMeta">Loading info...</div>
+      </div>
+    </div>
+
+    <!-- Tables -->
+    <div class="section-label">&#128203; Tables</div>
+    <div id="tableList">
+      <div style="font-family:var(--mono);font-size:0.73rem;color:var(--muted)">Upload a database to see tables...</div>
+    </div>
+
+    <!-- Voice -->
+    <div class="section-label" style="margin-top:1rem">&#127897; Voice Input</div>
+    <div class="card">
+      <div class="mic-area">
+        <button class="mic-btn" id="micBtn">&#127897;</button>
+        <div class="mic-label" id="micLabel">Click mic and speak your query</div>
+        <div class="rec-timer" id="recTimer">
+          <div class="dot dot-orange" style="animation:pulse 0.5s infinite"></div>
+          Recording... <span id="timerCount">10</span>s
+        </div>
+      </div>
+      <div id="voiceStatus" class="status"></div>
+    </div>
+
+    <!-- Text input -->
+    <div class="section-label">&#9998; Text Input</div>
+    <div class="card">
+      <div class="or-div">or type manually</div>
+      <textarea id="textInput" placeholder="e.g. Show all records from users table with age above 25..."></textarea>
+      <div class="examples" id="examples"></div>
+      <button class="btn btn-primary" id="convertBtn">&#9889; Convert to SQL and Run</button>
+      <div id="convertStatus" class="status"></div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="panel">
+
+    <!-- No DB loaded state -->
+    <div id="noDbState">
+      <div class="no-db-overlay">
+        <div class="no-db-icon">&#128190;</div>
+        <div class="no-db-text">
+          No database loaded yet.<br/>
+          <span>Upload a .db file</span> on the left<br/>
+          to start querying your data.
+        </div>
+      </div>
+    </div>
+
+    <!-- Query results (hidden until DB loaded) -->
+    <div id="queryState" style="display:none">
+      <div class="section-label">&#9889; Generated SQL</div>
+      <div class="card">
+        <div id="methodBadge"></div>
+        <div class="sql-label">Query</div>
+        <div class="sql-box" id="sqlDisplay"><span style="color:var(--muted)">Your SQL will appear here after conversion...</span></div>
+      </div>
+
+      <div class="section-label">&#128202; Query Results</div>
+      <div class="card">
+        <div id="resultsArea">
+          <div class="empty">
+            <div class="empty-icon">&#128374;</div>
+            <p>Results will appear here<br/>after you run a query.</p>
+          </div>
+        </div>
+        <div class="row-count" id="rowCount"></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+</div>
+
+<script>
+var BASE = 'http://127.0.0.1:5000';
+var dbLoaded = false;
+
+// Elements
+var uploadZone   = document.getElementById('uploadZone');
+var fileInput    = document.getElementById('fileInput');
+var uploadStatus = document.getElementById('uploadStatus');
+var dbInfoCard   = document.getElementById('dbInfoCard');
+var dbFileName   = document.getElementById('dbFileName');
+var dbMeta       = document.getElementById('dbMeta');
+var dbBadge      = document.getElementById('dbBadge');
+var clearBtn     = document.getElementById('clearBtn');
+var tableList    = document.getElementById('tableList');
+var micBtn       = document.getElementById('micBtn');
+var micLabel     = document.getElementById('micLabel');
+var recTimer     = document.getElementById('recTimer');
+var timerCount   = document.getElementById('timerCount');
+var voiceStatus  = document.getElementById('voiceStatus');
+var textInput    = document.getElementById('textInput');
+var convertBtn   = document.getElementById('convertBtn');
+var convertStatus= document.getElementById('convertStatus');
+var sqlDisplay   = document.getElementById('sqlDisplay');
+var methodBadge  = document.getElementById('methodBadge');
+var resultsArea  = document.getElementById('resultsArea');
+var rowCount     = document.getElementById('rowCount');
+var noDbState    = document.getElementById('noDbState');
+var queryState   = document.getElementById('queryState');
+var examplesEl   = document.getElementById('examples');
+
+// Helpers
+function showStatus(el, type, msg){
+  el.className = 'status show ' + type;
+  var icon = type === 'info' ? '<span class="spinner"></span>' : type === 'ok' ? '&#10003;' : '&#10007;';
+  el.innerHTML = icon + ' ' + msg;
+}
+
+function highlightSQL(sql){
+  var KW = ['SELECT','FROM','WHERE','ORDER','BY','GROUP','LIMIT','AND','OR','AS','COUNT','SUM','AVG','MAX','MIN','HAVING','DISTINCT','JOIN','ON','INNER','LEFT','RIGHT'];
+  var h = sql.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  h = h.replace(/'([^']*)'/g,"<span class='str'>'$1'</span>");
+  h = h.replace(/\b(\d+(?:\.\d+)?)\b/g,"<span class='num'>$1</span>");
+  KW.forEach(function(k){h = h.replace(new RegExp('\\b'+k+'\\b','g'),"<span class='kw'>"+k+"</span>");});
+  return h;
+}
+
+function renderTable(columns, rows){
+  if(!rows.length){
+    resultsArea.innerHTML = '<div class="empty"><div class="empty-icon">&#128269;</div><p>Query returned no rows.</p></div>';
+    rowCount.innerHTML = '';
+    return;
+  }
+  var html = '<div class="results-wrap"><table><thead><tr>';
+  columns.forEach(function(c){html += '<th>'+c+'</th>';});
+  html += '</tr></thead><tbody>';
+  rows.forEach(function(row){
+    html += '<tr>';
+    columns.forEach(function(c){html += '<td>'+(row[c]!==null&&row[c]!==undefined?row[c]:'&mdash;')+'</td>';});
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  resultsArea.innerHTML = html;
+  rowCount.innerHTML = '<span>'+rows.length+'</span> row'+(rows.length!==1?'s':'')+' returned';
+}
+
+function renderTables(tables){
+  if(!tables || !tables.length){
+    tableList.innerHTML = '<div style="font-family:var(--mono);font-size:0.73rem;color:var(--muted)">No tables found.</div>';
+    return;
+  }
+  var html = '<div class="table-list">';
+  tables.forEach(function(t){
+    html += '<div class="table-item">';
+    html += '<div class="table-item-name">&#128203; '+t.name+' <span style="color:var(--muted);font-weight:400;font-size:0.65rem">('+t.row_count+' rows)</span></div>';
+    html += '<div class="table-item-cols">';
+    t.columns.forEach(function(c){
+      html += '<span class="col-pill">'+c.name+' <span style="color:var(--accent2)">'+c.type+'</span></span>';
+    });
+    html += '</div></div>';
+  });
+  html += '</div>';
+  tableList.innerHTML = html;
+
+  // Build dynamic example chips
+  examplesEl.innerHTML = '';
+  var chips = [];
+  tables.forEach(function(t){
+    chips.push('show all '+t.name);
+    if(t.row_count > 0) chips.push('count '+t.name);
+  });
+  chips.slice(0,6).forEach(function(ex){
+    var c = document.createElement('div');
+    c.className = 'chip';
+    c.textContent = ex;
+    c.onclick = function(){textInput.value = ex; textInput.focus();};
+    examplesEl.appendChild(c);
+  });
+}
+
+function setDbLoaded(name, meta, tables){
+  dbLoaded = true;
+  dbInfoCard.style.display = 'block';
+  dbFileName.textContent = name;
+  dbMeta.textContent = meta;
+  dbBadge.innerHTML = '<div class="dot dot-green" style="background:var(--green)"></div>' + name;
+  dbBadge.className = 'badge badge-green';
+  noDbState.style.display = 'none';
+  queryState.style.display = 'block';
+  renderTables(tables);
+}
+
+function setDbCleared(){
+  dbLoaded = false;
+  dbInfoCard.style.display = 'none';
+  dbBadge.innerHTML = '<div class="dot dot-orange"></div>No DB Loaded';
+  dbBadge.className = 'badge badge-orange';
+  noDbState.style.display = 'block';
+  queryState.style.display = 'none';
+  tableList.innerHTML = '<div style="font-family:var(--mono);font-size:0.73rem;color:var(--muted)">Upload a database to see tables...</div>';
+  examplesEl.innerHTML = '';
+}
+
+// File upload handler
+function handleFileUpload(file){
+  if(!file) return;
+  var ext = file.name.split('.').pop().toLowerCase();
+  if(!['db','sqlite','sqlite3'].includes(ext)){
+    showStatus(uploadStatus, 'error', 'Invalid file. Use .db, .sqlite, or .sqlite3');
+    return;
+  }
+  showStatus(uploadStatus, 'info', 'Uploading ' + file.name + '...');
+  var formData = new FormData();
+  formData.append('file', file);
+  fetch(BASE + '/upload-db', {method:'POST', body:formData})
+    .then(function(r){return r.json();})
+    .then(function(data){
+      if(data.success){
+        showStatus(uploadStatus, 'ok', 'Uploaded! Found ' + data.table_count + ' table(s).');
+        setDbLoaded(data.filename, data.table_count + ' tables loaded', data.tables);
+      } else {
+        showStatus(uploadStatus, 'error', data.error || 'Upload failed.');
+      }
+    })
+    .catch(function(){
+      showStatus(uploadStatus, 'error', 'Cannot reach server. Is app.py running?');
+    });
+}
+
+// Drag and drop
+uploadZone.addEventListener('dragover', function(e){e.preventDefault(); uploadZone.classList.add('drag-over');});
+uploadZone.addEventListener('dragleave', function(){uploadZone.classList.remove('drag-over');});
+uploadZone.addEventListener('drop', function(e){
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  var file = e.dataTransfer.files[0];
+  if(file) handleFileUpload(file);
+});
+fileInput.addEventListener('change', function(){
+  if(fileInput.files[0]) handleFileUpload(fileInput.files[0]);
+});
+
+// Clear DB
+clearBtn.addEventListener('click', function(){
+  fetch(BASE + '/clear-db', {method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(){setDbCleared();})
+    .catch(function(){setDbCleared();});
+});
+
+// Mic recording
+var isRecording = false;
+var timerInterval = null;
+
+micBtn.addEventListener('click', function(){
+  if(isRecording) return;
+  isRecording = true;
+  micBtn.classList.add('recording');
+  micBtn.textContent = 'Stop';
+  micLabel.textContent = 'Recording... speak now!';
+  recTimer.classList.add('show');
+  showStatus(voiceStatus, 'info', 'Listening for 10 seconds...');
+  var secs = 10;
+  timerCount.textContent = secs;
+  timerInterval = setInterval(function(){
+    secs--;
+    timerCount.textContent = secs;
+    if(secs <= 0) clearInterval(timerInterval);
+  }, 1000);
+  fetch(BASE+'/voice-input', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({timeout:5, phrase_time_limit:10})
+  }).then(function(r){return r.json();}).then(function(data){
+    if(data.success){
+      textInput.value = data.text;
+      showStatus(voiceStatus, 'ok', 'Heard: "'+data.text+'"');
+      micLabel.textContent = 'Got it! Click Convert to run.';
+    } else {
+      showStatus(voiceStatus, 'error', data.error || 'Voice capture failed.');
+      micLabel.textContent = 'Click mic to try again';
+    }
+  }).catch(function(){
+    showStatus(voiceStatus, 'error', 'Cannot reach server.');
+    micLabel.textContent = 'Click mic to try again';
+  }).then(function(){
+    clearInterval(timerInterval);
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    micBtn.textContent = '&#127897;';
+    recTimer.classList.remove('show');
+  });
+});
+
+// Convert + Execute
+convertBtn.addEventListener('click', function(){
+  var text = textInput.value.trim();
+  if(!text){showStatus(convertStatus,'error','Please enter a query or use the microphone.'); return;}
+  if(!dbLoaded){showStatus(convertStatus,'error','Please upload a database first.'); return;}
+  convertBtn.disabled = true;
+  convertBtn.textContent = 'Processing...';
+  showStatus(convertStatus,'info','Converting to SQL...');
+  sqlDisplay.innerHTML = '<span style="color:var(--muted)">Generating...</span>';
+  methodBadge.innerHTML = '';
+  resultsArea.innerHTML = '<div class="empty"><div class="empty-icon" style="animation:spin 1s linear infinite">&#9881;</div><p>Running query...</p></div>';
+  rowCount.innerHTML = '';
+  fetch(BASE+'/text-to-sql', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:text})
+  }).then(function(r){return r.json();}).then(function(nlData){
+    if(!nlData.success){
+      showStatus(convertStatus,'error',nlData.error||'Conversion failed.');
+      sqlDisplay.innerHTML = '<span style="color:var(--red)">'+( nlData.error||'Could not generate SQL.')+'</span>';
+      convertBtn.disabled=false; convertBtn.textContent='&#9889; Convert to SQL and Run';
+      return;
+    }
+    sqlDisplay.innerHTML = highlightSQL(nlData.sql);
+    var isAI = nlData.method !== 'rule-based';
+    methodBadge.innerHTML = '<div class="method-badge '+(isAI?'ai':'rule')+'">'+(isAI?'AI':'Rule')+': '+nlData.method+'</div>';
+    showStatus(convertStatus,'info','Executing on database...');
+    return fetch(BASE+'/execute-query', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sql:nlData.sql})
+    }).then(function(r){return r.json();}).then(function(exData){
+      if(!exData.success){
+        showStatus(convertStatus,'error',exData.error||'Execution failed.');
+        resultsArea.innerHTML = '<div class="empty"><div class="empty-icon">&#9888;</div><p style="color:var(--red)">'+exData.error+'</p></div>';
+      } else {
+        renderTable(exData.columns, exData.rows);
+        showStatus(convertStatus,'ok','Done! '+exData.row_count+' row'+(exData.row_count!==1?'s':'')+' returned.');
+      }
+    });
+  }).catch(function(){
+    showStatus(convertStatus,'error','Cannot reach server. Is app.py running?');
+  }).then(function(){
+    convertBtn.disabled=false;
+    convertBtn.textContent='&#9889; Convert to SQL and Run';
+  });
+});
+
+textInput.addEventListener('keydown', function(e){
+  if(e.key==='Enter' && e.ctrlKey) convertBtn.click();
+});
+
+// Init - check if DB already loaded
+fetch(BASE+'/db-info')
+  .then(function(r){return r.json();})
+  .then(function(data){
+    if(data.loaded){
+      setDbLoaded(data.name, data.table_count+' tables loaded', data.tables);
+      showStatus(uploadStatus, 'ok', 'Previously loaded: '+data.name);
+    }
+  }).catch(function(){});
+</script>
+</body>
+</html>
